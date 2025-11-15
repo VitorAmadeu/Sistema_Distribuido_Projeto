@@ -1,3 +1,5 @@
+# Algoritimo base -> https://gist.github.com/xmichaelx/2a3b45ba589296da73ef
+
 import time
 import os
 import csv

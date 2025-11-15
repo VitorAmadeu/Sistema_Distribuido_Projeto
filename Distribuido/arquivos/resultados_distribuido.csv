@@ -1,0 +1,13 @@
+Tipo_Execucao,Comprimento_Estrada,Densidade,Passos_Simulacao,V_Max,P_Slowdown,Num_Workers,Tempo_s
+Distribuido (2 workers),1000,0.1,200,5,0.3,2,0.1738695000003645
+Distribuido (2 workers),1000,0.3,200,5,0.3,2,0.33121440000013536
+Distribuido (2 workers),5000,0.1,200,5,0.3,2,0.614511599999787
+Distribuido (2 workers),5000,0.3,200,5,0.3,2,0.9813299999996161
+Distribuido (2 workers),10000,0.1,200,5,0.3,2,0.8207627000001594
+Distribuido (2 workers),10000,0.3,200,5,0.3,2,1.9710580999999365
+Distribuido (4 workers),1000,0.1,200,5,0.3,4,0.28595660000064527
+Distribuido (4 workers),1000,0.3,200,5,0.3,4,0.4775323000003482
+Distribuido (4 workers),5000,0.1,200,5,0.3,4,0.6471539000003759
+Distribuido (4 workers),5000,0.3,200,5,0.3,4,1.0085315999995146
+Distribuido (4 workers),10000,0.1,200,5,0.3,4,1.1048780999999508
+Distribuido (4 workers),10000,0.3,200,5,0.3,4,1.9234857000001284
