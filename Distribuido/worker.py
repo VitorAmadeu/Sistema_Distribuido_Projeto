@@ -4,57 +4,54 @@ import random
 import time
 import comunicacao # Nosso módulo helper
 
-HOST = '127.0.0.1'  # O IP do Mestre
+HOST = '127.0.0.1'  # Endereço IP do servidor mestre
 PORT = 65432
 
 def run_na_sch_rules(road, start_index, end_index, v_max, p_slow):
     """
-    Executa as 4 regras do NaSch para um sub-conjunto (chunk) da estrada.
-    Lê da 'road' global, retorna um mapa de {nova_pos: nova_vel}
+    Aplica as regras do modelo Nagel-Schreckenberg a um segmento da estrada.
+    Retorna um dicionário com as novas posições e velocidades dos carros no segmento.
     """
     partial_results = {}
     road_length = len(road)
     
-    # Itera APENAS sobre o pedaço que este worker é responsável
+    # Processa apenas o segmento atribuído a este worker
     for i in range(start_index, end_index):
         
-        # Se a célula NÃO tiver um carro, pule
+        # Ignora células vazias
         if road[i] == -1:
             continue
 
-        # --- É um carro. Aplicar as 4 regras do NaSch ---
+        # Aplica as quatro regras do NaSch para o carro na posição i
         v_atual = road[i]
         
-        # Regra 0: Encontrar a distância (d) para o próximo carro
+        # Regra 1: Calcula a distância até o próximo carro (com wrap-around)
         distancia = 1
-        # Procura na estrada global (lida com wrap-around)
         while road[(i + distancia) % road_length] == -1:
             distancia += 1
             if distancia > v_max + 1:
                 break
         
-        # Regra 1: Aceleração
+        # Regra 2: Aceleração
         v_nova = min(v_atual + 1, v_max)
         
-        # Regra 2: Desaceleração (Evitar Colisão)
+        # Regra 3: Desaceleração para evitar colisão
         v_nova = min(v_nova, distancia - 1)
         
-        # Regra 3: Aleatorização
+        # Regra 4: Aleatorização (slowdown probabilístico)
         if v_nova > 0 and random.random() < p_slow:
-            v_nova = v_nova - 1
+            v_nova -= 1
             
-        # Regra 4: Movimento (calcular nova posição)
+        # Calcula nova posição após movimento
         nova_posicao = (i + v_nova) % road_length
         
-        # Armazena o resultado
-        # O worker NÃO escreve em um 'next_road', ele reporta
-        # o que ele encontrou para o Mestre.
+        # Registra resultado parcial para envio ao mestre
         partial_results[nova_posicao] = v_nova
         
     return partial_results
 
 def main():
-    """Função principal do Trabalhador."""
+    """Executa o loop principal do worker: conecta ao mestre e processa simulações."""
     
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
@@ -62,13 +59,13 @@ def main():
             print(f"[Worker] Conectado ao Mestre em {HOST}:{PORT}")
         except ConnectionRefusedError:
             print(f"[Worker] ERRO: Não foi possível conectar ao Mestre.")
-            print("Você lembrou de iniciar o 'servidor_mestre.py' primeiro?")
+            print("Certifique-se de que 'servidor_mestre.py' está em execução.")
             return
 
-        # 1. Receber a configuração inicial
+        # Recebe configuração inicial do mestre
         config = comunicacao.recv_msg(s)
         if config is None:
-            print("[Worker] Falha ao receber config.")
+            print("[Worker] Falha ao receber configuração.")
             return
 
         worker_id = config['id']
@@ -78,11 +75,11 @@ def main():
         v_max = config['v_max']
         p_slowdown = config['p_slowdown']
         
-        print(f"[Worker {worker_id}] Tarefa recebida. Cuidarei de {start_index}-{end_index-1}")
+        print(f"[Worker {worker_id}] Tarefa recebida. Responsável por {start_index}-{end_index-1}")
 
-        # 2. Loop de Simulação (ouvindo o Mestre)
+        # Loop de simulação: recebe tarefas e envia resultados
         while True:
-            # A. Receber a estrada atual (ou sinal de término)
+            # Recebe dados da tarefa ou sinal de término
             task_data = comunicacao.recv_msg(s)
             
             if task_data is None:
@@ -95,15 +92,16 @@ def main():
 
             road = task_data['road']
             
-            # B. Processar o trabalho (a parte de CPU)
+            # Processa o segmento da estrada
             partial_results = run_na_sch_rules(
                 road, start_index, end_index, v_max, p_slowdown
             )
             
-            # C. Enviar o resultado parcial de volta ao Mestre
+            # Envia resultados parciais ao mestre
             comunicacao.send_msg(s, partial_results)
             
         print(f"[Worker {worker_id}] Desconectando.")
 
 if __name__ == "__main__":
+    # Inicia o worker quando o script é executado diretamente
     main()

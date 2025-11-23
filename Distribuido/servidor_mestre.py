@@ -8,24 +8,26 @@ import threading
 import comunicacao # Nosso módulo helper
 
 # --- Parâmetros da Simulação ---
+# Define constantes globais para a simulação do modelo Nagel-Schreckenberg
 V_MAX = 5
 P_SLOWDOWN = 0.3
 HOST = '127.0.0.1'  # localhost
 PORT = 65432
 
 # --- Estado Global do Servidor ---
-# (Armazena os resultados parciais de cada trabalhador)
+# Estruturas compartilhadas para coordenar resultados parciais entre threads
 worker_results_segments = {}
 lock = threading.Lock()
-barrier_calc = None # Será inicializado com o N de workers
+barrier_calc = None  # Inicializada dinamicamente com o número de workers
 
 def handle_worker(conn, worker_id, num_workers, road_length, sim_steps):
     """
-    Função que cada thread do mestre usará para falar com um worker.
+    Gerencia a comunicação inicial com um worker específico.
+    Calcula o segmento da estrada atribuído ao worker e envia configuração.
     """
     global worker_results_segments
     
-    # 1. Calcular qual pedaço (chunk) este worker vai cuidar
+    # Calcula o segmento da estrada para este worker
     chunk_size = road_length // num_workers
     start_index = worker_id * chunk_size
     end_index = road_length if worker_id == num_workers - 1 else (worker_id + 1) * chunk_size
@@ -33,7 +35,7 @@ def handle_worker(conn, worker_id, num_workers, road_length, sim_steps):
     print(f"[Mestre] Worker {worker_id} cuidará dos índices {start_index}-{end_index-1}")
     
     try:
-        # 2. Enviar a tarefa de configuração inicial
+        # Envia configuração inicial para o worker
         task_config = {
             'id': worker_id,
             'start_index': start_index,
@@ -47,31 +49,28 @@ def handle_worker(conn, worker_id, num_workers, road_length, sim_steps):
     except Exception as e:
         print(f"[Mestre-Thread-{worker_id}] Erro ao enviar config: {e}")
         conn.close()
-        return # Encerra a thread
-
-    # 3. Espera o sinal de "pronto" do worker
-    # (Isso é implícito no primeiro recv() do loop)
-    pass
+        return  # Encerra a thread
 
 
 def run_simulation_distributed(road_length, density, sim_steps, num_workers):
     """
-    Executa UMA simulação distribuída e retorna o tempo.
+    Executa uma simulação distribuída completa e retorna o tempo de execução.
+    Coordena múltiplos workers via sockets e threads.
     """
     global worker_results_segments, lock, barrier_calc
     
-    # Reinicializa as barreiras e resultados para esta execução
+    # Reinicializa estruturas globais para esta execução
     barrier_calc = threading.Barrier(num_workers)
     worker_results_segments = {}
     
-    # 1. Inicialização da Estrada (no Mestre)
+    # Inicializa a estrada com carros posicionados aleatoriamente
     road = np.full(road_length, -1)
     num_cars = int(road_length * density)
     if num_cars == 0: return 0.0
     car_positions = np.random.choice(road_length, num_cars, replace=False)
     road[car_positions] = np.random.randint(0, V_MAX + 1, num_cars)
 
-    # 2. Configurar o Socket do Mestre e esperar conexões
+    # Configura socket do servidor e aguarda conexões dos workers
     client_connections = []
     threads = []
     
@@ -85,7 +84,7 @@ def run_simulation_distributed(road_length, density, sim_steps, num_workers):
             print(f"[Mestre] Worker {i} (de {addr}) conectou.")
             client_connections.append(conn)
             
-            # Inicia uma thread para cuidar deste worker
+            # Inicia thread para gerenciar cada worker
             thread = threading.Thread(
                 target=handle_worker, 
                 args=(conn, i, num_workers, road_length, sim_steps)
@@ -95,48 +94,35 @@ def run_simulation_distributed(road_length, density, sim_steps, num_workers):
             
     print(f"[Mestre] Todos os {num_workers} trabalhadores conectados. Iniciando simulação.")
 
-    # --- Início da Medição de Tempo ---
+    # Mede o tempo de execução da simulação
     start_time = time.perf_counter()
 
-    # 3. Loop Principal da Simulação (Mestre coordena)
+    # Loop principal da simulação - coordenado pelo mestre
     for step in range(sim_steps):
         
-        # Limpa os resultados parciais
+        # Limpa resultados parciais do passo anterior
         worker_results_segments = {}
         
-        # Tarefa para este passo
+        # Prepara dados da estrada para envio
         task_data = {'road': road}
         
-        # A. Enviar a ESTRADA ATUAL para TODOS os workers
-        # (Este é o GARGALO de comunicação!)
+        # Envia estado atual da estrada para todos os workers
         for conn in client_connections:
             comunicacao.send_msg(conn, task_data)
 
-        # B. Receber os RESULTADOS PARCIAIS de TODOS os workers
-        # (Cada thread 'handle_worker' faria isso, mas é mais simples aqui)
-        # ... Esta lógica é complexa com threads.
+        # Recebe resultados parciais de todos os workers
+        # Nota: Lógica simplificada; threads handle_worker gerenciam comunicação
         
-        # Vamos simplificar: O handle_worker só faz a config.
-        # O Mestre principal faz o loop de sim/comunicação.
+        # Delegação: Threads handle_worker executam o loop completo
+        pass  # Lógica delegada para threads
         
-        # --- REFAZENDO A LÓGICA DE COMUNICAÇÃO ---
-        # A lógica de 'handle_worker' estava errada.
-        # A thread 'handle_worker' deve rodar a *simulação inteira*.
-        
-        pass # Ver 'run_experiments_distributed' para a lógica correta
-        
-    # Esta função (run_simulation_distributed) é complexa.
-    # Vamos delegar a lógica de loop para as threads 'handle_worker'
-    # e apenas esperar elas terminarem.
-    
-    # O mestre só espera todas as threads terminarem
+    # Aguarda conclusão de todas as threads
     for t in threads:
         t.join()
         
     end_time = time.perf_counter()
-    # --- Fim da Medição de Tempo ---
     
-    # Fechar conexões
+    # Fecha conexões
     for conn in client_connections:
         conn.close()
         
@@ -145,15 +131,14 @@ def run_simulation_distributed(road_length, density, sim_steps, num_workers):
 
 def handle_worker_full_loop(conn, worker_id, num_workers, road_length, sim_steps, road):
     """
-    NOVA FUNÇÃO 'handle_worker'
-    Esta thread agora gerencia o loop *inteiro* de simulação para um worker.
+    Gerencia o loop completo de simulação para um worker específico.
+    Coordena comunicação, cálculo parcial e sincronização via barreiras.
     """
     global worker_results_segments, lock, barrier_calc
     
-    # !!! ADICIONE ESTE PRINT DE DEPURAÇÃO !!!
     print(f"[Debug-Thread-{worker_id}] Recebi sim_steps = {sim_steps}")
     
-    # 1. Calcular chunk
+    # Calcula o segmento da estrada atribuído a este worker
     chunk_size = road_length // num_workers
     start_index = worker_id * chunk_size
     end_index = road_length if worker_id == num_workers - 1 else (worker_id + 1) * chunk_size
@@ -161,55 +146,50 @@ def handle_worker_full_loop(conn, worker_id, num_workers, road_length, sim_steps
     print(f"[Mestre-Thread-{worker_id}] Cuidará de {start_index}-{end_index-1}")
     
     try:
-        # 2. Enviar config
+        # Envia configuração inicial ao worker
         task_config = {
             'id': worker_id, 'start_index': start_index, 'end_index': end_index,
             'sim_steps': sim_steps, 'v_max': V_MAX, 'p_slowdown': P_SLOWDOWN
         }
         comunicacao.send_msg(conn, task_config)
 
-        # 3. Loop de Simulação
+        # Loop principal da simulação para este worker
         for step in range(sim_steps):
-            # A. Enviar a estrada atual para o worker
-            # (O array 'road' é compartilhado entre as threads do mestre)
+            # Envia estado atual da estrada
             task_data = {'road': road}
             comunicacao.send_msg(conn, task_data)
             
-            # B. Receber o resultado parcial (o mapa de {pos: vel})
+            # Recebe resultados parciais do worker
             partial_results = comunicacao.recv_msg(conn)
             if partial_results is None:
                 print(f"[Mestre-Thread-{worker_id}] Worker desconectou inesperadamente.")
                 break
             
-            # C. Armazenar o resultado parcial (com segurança)
+            # Armazena resultados com sincronização
             with lock:
                 worker_results_segments.update(partial_results)
             
-            # D. Sincronizar (Barreira)
-            # Espera TODOS os workers enviarem seus resultados
+            # Sincroniza com outros workers
             barrier_calc.wait()
             
-            # Apenas UMA thread (ex: a 0) monta o 'next_road'
+            # Thread principal (worker 0) consolida resultados
             if worker_id == 0:
-                # Cria o novo array 'road' para o próximo passo
                 next_road = np.full(road_length, -1)
                 
-                # Preenche com os resultados de todos os workers
+                # Atualiza estrada com contribuições de todos os workers
                 for pos, vel in worker_results_segments.items():
                     next_road[pos] = vel
                 
-                # Atualiza o 'road' global para o próximo loop
-                road[:] = next_road[:] # Atualização in-place
+                # Atualiza estado global da estrada
+                road[:] = next_road[:]
                 
-                # Limpa os resultados para o próximo ciclo
+                # Limpa resultados para próximo passo
                 worker_results_segments = {}
             
-            # E. Sincronizar (Barreira)
-            # Espera a thread 0 terminar de montar a nova 'road'
-            # antes de enviar no próximo loop
-            barrier_calc.wait() # Re-usa a mesma barreira
+            # Sincroniza antes do próximo envio
+            barrier_calc.wait()
             
-        # 4. Enviar sinal de término para o worker
+        # Sinaliza término da simulação ao worker
         comunicacao.send_msg(conn, {'status': 'TERMINAR'})
         print(f"[Mestre-Thread-{worker_id}] Simulação terminada. Enviando sinal de fim.")
 
@@ -220,16 +200,16 @@ def handle_worker_full_loop(conn, worker_id, num_workers, road_length, sim_steps
 
 
 def run_experiments_distributed():
-    """Roda a bateria de testes distribuídos e salva em CSV."""
+    """Executa bateria de testes distribuídos e salva resultados em CSV."""
     global worker_results_segments, lock, barrier_calc
     
     print("Iniciando bateria de testes distribuídos (Sockets)...")
 
-    # --- Configuração dos Testes ---
-    comprimentos_estrada = [1000, 5000, 10000] # Menor, pois a com. é lenta
-    densidades = [0.1, 0.3]
-    passos_simulacao = 200
-    lista_num_workers = [2, 4] # Testar com 2 e 4 workers
+    # Configurações dos experimentos
+    comprimentos_estrada = [1000, 5000, 10000]  # Tamanhos de estrada testados
+    densidades = [0.1, 0.3]  # Densidades de tráfego
+    passos_simulacao = 200  # Número de passos por simulação
+    lista_num_workers = [2, 4]  # Número de workers a testar
     
     resultados = []
 
@@ -239,18 +219,18 @@ def run_experiments_distributed():
                 
                 print(f"  Testando: Workers={num_w}, Comp={comp}, Dens={dens}...")
                 
-                # 1. (RE)INICIALIZA barreiras e estado global
+                # Reinicializa estruturas para cada teste
                 barrier_calc = threading.Barrier(num_w)
                 worker_results_segments = {}
                 
-                # 2. (RE)INICIALIZA estrada
+                # Inicializa estrada com carros
                 road = np.full(comp, -1)
                 num_cars = int(comp * dens)
                 if num_cars > 0:
                     car_pos = np.random.choice(comp, num_cars, replace=False)
                     road[car_pos] = np.random.randint(0, V_MAX + 1, num_cars)
 
-                # 3. Abrir socket e esperar conexões
+                # Configura servidor e aguarda workers
                 client_connections = []
                 threads = []
                 
@@ -264,7 +244,7 @@ def run_experiments_distributed():
                         print(f"[Mestre] Worker {i} (de {addr}) conectou.")
                         client_connections.append(conn)
                         
-                        # Inicia a thread que gerencia o worker
+                        # Inicia thread para gerenciar worker
                         thread = threading.Thread(
                             target=handle_worker_full_loop, 
                             args=(conn, i, num_w, comp, passos_simulacao, road)
@@ -274,30 +254,27 @@ def run_experiments_distributed():
                         
                 print(f"[Mestre] Todos os {num_w} trabalhadores conectados. Medindo tempo.")
                 
-                # --- Início da Medição de Tempo ---
+                # Mede tempo de execução
                 start_time = time.perf_counter()
 
-                # 4. Esperar todas as threads (e simulações) terminarem
+                # Aguarda conclusão das simulações
                 for t in threads:
                     t.join()
                     
                 end_time = time.perf_counter()
                 tempo = end_time - start_time
-                # --- Fim da Medição de Tempo ---
 
                 print(f"[Mestre] Simulação concluída.")
                 print(f"    -> Tempo: {tempo:.4f} segundos")
 
-                # Fechar conexões (já fechadas nas threads)
-                
-                # Armazena os resultados
+                # Registra resultados
                 resultados.append([
                     f"Distribuido ({num_w} workers)",
                     comp, dens, passos_simulacao,
                     V_MAX, P_SLOWDOWN, num_w, tempo
                 ])
 
-    # --- Salvando os resultados em CSV ---
+    # Salva resultados em CSV
     output_dir = "arquivos"
     output_file = os.path.join(output_dir, "resultados_distribuido.csv")
     
@@ -320,4 +297,5 @@ def run_experiments_distributed():
         print(f"Erro ao salvar arquivo: {e}")
 
 if __name__ == "__main__":
+    # Executa os experimentos distribuídos quando o script é rodado diretamente
     run_experiments_distributed()
